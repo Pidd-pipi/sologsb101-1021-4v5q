@@ -15,6 +15,13 @@ import {
 } from '$lib/types/carve';
 import { designById, updateDesign } from './designStore';
 import { updateStone } from './stoneStore';
+import { assertStoneWritable } from '$lib/stores/loanStore';
+
+/** 借出期间按印稿锁定其下工序 */
+function assertDesignWritable(designId: string): void {
+  const design = designById(designId);
+  if (design) assertStoneWritable(design.stoneId);
+}
 
 export const carves = writable<Carve[]>([]);
 export const carveLoading = writable(false);
@@ -64,6 +71,7 @@ export function nextSeq(designId: string): number {
 }
 
 export async function createCarve(draft: CarveDraft): Promise<Carve> {
+  assertDesignWritable(draft.designId);
   const now = Date.now();
   const row: Carve = { ...draft, id: createId('carve'), createdAt: now, updatedAt: now };
   await db.carves.put(row);
@@ -72,12 +80,15 @@ export async function createCarve(draft: CarveDraft): Promise<Carve> {
 }
 
 export async function updateCarve(id: string, patch: Partial<Carve>): Promise<void> {
+  const target = get(carves).find((carve) => carve.id === id);
+  if (target) assertDesignWritable(target.designId);
   await db.carves.update(id, { ...patch, updatedAt: Date.now() } as never);
   await loadCarves();
 }
 
 export async function removeCarve(id: string): Promise<void> {
   const target = get(carves).find((carve) => carve.id === id);
+  if (target) assertDesignWritable(target.designId);
   await db.carves.delete(id);
   if (target) {
     const rest = carvesOfDesign(target.designId)
@@ -89,6 +100,7 @@ export async function removeCarve(id: string): Promise<void> {
 }
 
 export async function reorderCarves(designId: string, orderedIds: string[]): Promise<void> {
+  assertDesignWritable(designId);
   const indexOf = new Map(orderedIds.map((id, index) => [id, index]));
   const rows = carvesOfDesign(designId)
     .sort((a, b) => {
@@ -103,6 +115,9 @@ export async function reorderCarves(designId: string, orderedIds: string[]): Pro
 
 export async function batchUpdateCarves(ids: string[], patch: Partial<Carve>): Promise<void> {
   if (ids.length === 0) return;
+  get(carves)
+    .filter((carve) => ids.includes(carve.id))
+    .forEach((carve) => assertDesignWritable(carve.designId));
   const now = Date.now();
   const rows = get(carves)
     .filter((carve) => ids.includes(carve.id))
@@ -137,6 +152,7 @@ export async function advanceCarve(id: string): Promise<CarveState> {
 
 /** 按标准刀法序列生成工序（已存在的序号跳过） */
 export async function generateStandardSequence(designId: string): Promise<number> {
+  assertDesignWritable(designId);
   const existing = carvesOfDesign(designId);
   const now = Date.now();
   let created = 0;

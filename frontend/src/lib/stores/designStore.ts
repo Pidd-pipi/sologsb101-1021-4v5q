@@ -3,9 +3,9 @@
  * 维护印稿草稿与采用稿标记；同一印石可存多稿，采用稿唯一。
  */
 import { derived, get, writable } from 'svelte/store';
-import { createId, db, removeDesignCascade } from '$lib/utils/db';
+import { createId, db, readUiPrefs, removeDesignCascade, writeUiPrefs } from '$lib/utils/db';
 import type { BorderStyle, Design, DesignDraft, DesignStyle } from '$lib/types/design';
-import { readUiPrefs, writeUiPrefs } from '$lib/utils/db';
+import { assertStoneWritable } from '$lib/stores/loanStore';
 
 export interface DesignFilters {
   keyword: string;
@@ -105,6 +105,7 @@ export function resetDesignFilters(): void {
 }
 
 export async function createDesign(draft: DesignDraft): Promise<Design> {
+  assertStoneWritable(draft.stoneId);
   const now = Date.now();
   const row: Design = { ...draft, id: createId('design'), createdAt: now, updatedAt: now };
   await db.designs.put(row);
@@ -117,12 +118,15 @@ export async function createDesign(draft: DesignDraft): Promise<Design> {
 
 export async function updateDesign(id: string, patch: Partial<Design>): Promise<void> {
   const existing = designById(id);
+  if (existing) assertStoneWritable(existing.stoneId);
   await db.designs.update(id, { ...patch, updatedAt: Date.now() } as never);
   if (patch.adopted && existing) await clearOtherAdopted(existing.stoneId, id);
   await loadDesigns();
 }
 
 export async function removeDesign(id: string): Promise<void> {
+  const existing = designById(id);
+  if (existing) assertStoneWritable(existing.stoneId);
   await removeDesignCascade(id);
   await loadDesigns();
 }

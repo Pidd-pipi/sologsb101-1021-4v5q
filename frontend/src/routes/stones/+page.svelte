@@ -114,6 +114,8 @@
       knobStyle: stone.knobStyle,
       purchaseDate: stone.purchaseDate,
       state: stone.state,
+      lentOut: stone.lentOut,
+      currentLoanId: stone.currentLoanId,
     };
     dialogOpen = true;
   }
@@ -219,9 +221,14 @@
               <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">{STONE_TYPE_LABEL[stone.stoneType]}</span>
               <span class="font-semibold text-ink">{stone.name}</span>
             </div>
-            <span class="gb-tag" style="color:{STONE_STATE_COLOR[stone.state]};border-color:{STONE_STATE_COLOR[stone.state]}66">
-              {STONE_STATE_LABEL[stone.state]}
-            </span>
+            <div class="flex flex-wrap items-center gap-1">
+              {#if stone.lentOut}
+                <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66;background:#9c2b1f1a">借展中</span>
+              {/if}
+              <span class="gb-tag" style="color:{STONE_STATE_COLOR[stone.state]};border-color:{STONE_STATE_COLOR[stone.state]}66">
+                {STONE_STATE_LABEL[stone.state]}
+              </span>
+            </div>
           </header>
 
           <dl class="space-y-1 text-sm text-ink-soft">
@@ -244,10 +251,10 @@
             {#if $currentStoneId !== stone.id}
               <button class="gb-btn" onclick={() => setCurrentStone(stone.id)}>设为当前</button>
             {/if}
-            <button class="gb-btn" onclick={() => advance(stone)}>推进状态</button>
+            <button class="gb-btn" disabled={stone.lentOut} title={stone.lentOut ? '借展期间锁定' : ''} onclick={() => advance(stone)}>推进状态</button>
             <button class="gb-btn" onclick={() => openDesigns(stone)}>印稿设计</button>
-            <button class="gb-btn" onclick={() => openEdit(stone)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = stone)}>删除</button>
+            <button class="gb-btn" disabled={stone.lentOut} title={stone.lentOut ? '借展期间锁定' : ''} onclick={() => openEdit(stone)}>编辑</button>
+            <button class="gb-btn-danger" disabled={stone.lentOut} title={stone.lentOut ? '借展期间锁定' : ''} onclick={() => (pendingDelete = stone)}>删除</button>
           </div>
         </article>
       {/each}

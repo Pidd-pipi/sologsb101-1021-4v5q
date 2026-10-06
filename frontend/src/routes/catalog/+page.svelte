@@ -93,6 +93,10 @@
     return $stones.find((stone) => stone.id === stoneId)?.name ?? '（印石已删除）';
   }
 
+  function isStoneLent(stoneId: string): boolean {
+    return $stones.some((stone) => stone.id === stoneId && stone.lentOut);
+  }
+
   function showToast(text: string): void {
     toast = text;
     setTimeout(() => (toast = ''), 2600);
@@ -267,7 +271,14 @@
                 </div>
               </td>
               <td>{designText(entry.designId)}</td>
-              <td>{stoneText(entry.stoneId)}</td>
+              <td>
+                <div class="flex flex-wrap items-center gap-1">
+                  <span>{stoneText(entry.stoneId)}</span>
+                  {#if isStoneLent(entry.stoneId)}
+                    <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66;background:#9c2b1f1a">借展中</span>
+                  {/if}
+                </div>
+              </td>
               <td>
                 <select
                   class="gb-input py-1"

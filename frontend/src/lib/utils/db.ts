@@ -1,8 +1,8 @@
 /**
  * IndexedDB 持久化层（Dexie 封装）
- * - 数据结构版本号与升级迁移逻辑（v1 初版；v2 为 impressions 增加 grade 索引、
- *   为 catalogs 增加 orderNo 索引，并回填历史记录缺失字段）
- * - 五张业务表的增删改查与整库导入导出
+ * - 数据结构版本号与升级迁移逻辑（v1 初版；v2 为 impressions/catalogs 补索引并回填缺失字段；
+ *   v3 新增借展批次 loanBatches / 借展条目 loanItems 表，并为旧档案 stones 回填借出标记）
+ * - 业务表的增删改查与整库导入导出
  * - 首次打开自动播种三层互相引用的演示数据（幂等）
  * 纯前端应用：不依赖任何后端服务或数据库。
  */
@@ -12,12 +12,13 @@ import type { Design } from '$lib/types/design';
 import type { Carve } from '$lib/types/carve';
 import type { Impression } from '$lib/types/impression';
 import type { Catalog } from '$lib/types/catalog';
+import type { LoanBatch, LoanItem, LoanSnapshotItem } from '$lib/types/loan';
 
 /** 数据库名（README 与导出文件均使用该名称） */
 export const DB_NAME = 'gbsealcarve';
 
 /** 当前数据结构版本号 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 /** localStorage 侧少量元数据键 */
 export const LS_KEYS = {
@@ -85,6 +86,8 @@ class SealCarveDatabase extends Dexie {
   carves!: Table<Carve, string>;
   impressions!: Table<Impression, string>;
   catalogs!: Table<Catalog, string>;
+  loanBatches!: Table<LoanBatch, string>;
+  loanItems!: Table<LoanItem, string>;
 
   constructor() {
     super(DB_NAME);
@@ -99,7 +102,7 @@ class SealCarveDatabase extends Dexie {
     });
 
     // v2：补充检索索引并回填历史记录缺失字段
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         stones: 'id, name, stoneType, knobStyle, state, purchaseDate, updatedAt',
         designs: 'id, stoneId, style, borderStyle, adopted, updatedAt',
@@ -129,6 +132,28 @@ class SealCarveDatabase extends Dexie {
           .modify((catalog) => {
             if (typeof catalog.orderNo !== 'number' || catalog.orderNo <= 0) catalog.orderNo = 1;
             if (!catalog.included) catalog.included = 'pending';
+          });
+      });
+
+    // v3：新增借展批次 / 借展条目表，并为旧档案回填借出标记（缺字段按未借出兼容）
+    this.version(3)
+      .stores({
+        stones: 'id, name, stoneType, knobStyle, state, purchaseDate, lentOut, currentLoanId, updatedAt',
+        designs: 'id, stoneId, style, borderStyle, adopted, updatedAt',
+        carves: 'id, designId, seq, knifeMethod, operator, state, updatedAt',
+        impressions: 'id, designId, grade, paperType, stampedAt, updatedAt',
+        catalogs: 'id, stoneId, designId, orderNo, included, updatedAt',
+        loanBatches: 'id, batchNo, borrower, status, loanDate, expectedReturnDate, updatedAt',
+        loanItems: 'id, batchId, stoneId, status, returnedAt, updatedAt',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<Stone>('stones')
+          .toCollection()
+          .modify((stone) => {
+            // 旧档案缺借出字段时一律按「未借出」兼容
+            if (typeof stone.lentOut !== 'boolean') stone.lentOut = false;
+            if (typeof stone.currentLoanId !== 'string') stone.currentLoanId = null;
           });
       });
   }
@@ -167,6 +192,8 @@ export async function seedDatabase(): Promise<void> {
       knobStyle: 'flat',
       purchaseDate: '2025-11-08',
       state: 'carved',
+      lentOut: false,
+      currentLoanId: null,
       createdAt: now - day * 90,
       updatedAt: now - day * 4,
     },
@@ -178,6 +205,8 @@ export async function seedDatabase(): Promise<void> {
       knobStyle: 'bridge',
       purchaseDate: '2026-01-16',
       state: 'carving',
+      lentOut: false,
+      currentLoanId: null,
       createdAt: now - day * 52,
       updatedAt: now - day * 2,
     },
@@ -189,6 +218,8 @@ export async function seedDatabase(): Promise<void> {
       knobStyle: 'beast',
       purchaseDate: '2025-08-21',
       state: 'idle',
+      lentOut: true,
+      currentLoanId: 'loan_seed_01',
       createdAt: now - day * 160,
       updatedAt: now - day * 30,
     },
@@ -200,6 +231,8 @@ export async function seedDatabase(): Promise<void> {
       knobStyle: 'thin',
       purchaseDate: '2026-02-02',
       state: 'carving',
+      lentOut: false,
+      currentLoanId: null,
       createdAt: now - day * 30,
       updatedAt: now - day,
     },
@@ -241,12 +274,101 @@ export async function seedDatabase(): Promise<void> {
     { id: 'cata_0401', stoneId: 'stone_04', designId: 'design_0401', orderNo: 4, included: 'excluded', note: '此稿暂不收录，另拟新稿', createdAt: now - day * 10, updatedAt: now - day * 2 },
   ];
 
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
+  // 借展点交演示数据：一个借出中批次（stone_03）+ 一个已归还历史批次（stone_01，含缺损与养护结论）
+  const loanBatches: LoanBatch[] = [
+    {
+      id: 'loan_seed_01',
+      batchNo: 'LOAN-20260925-001',
+      borrower: '西泠印社',
+      eventName: '金石篆刻艺术展',
+      loanDate: '2026-09-25',
+      expectedReturnDate: '2026-10-25',
+      status: 'active',
+      sealSnapshot: JSON.stringify([
+        {
+          stoneId: 'stone_03',
+          stoneName: '昌化鸡血石古兽钮',
+          stoneType: 'changhua',
+          sizeMm: '22×22×55',
+          catalogOrderNo: 3,
+          sealText: '金石为开',
+          annotation: '汉谚，朱文借边',
+          style: 'zhu',
+          bestGrade: 'excellent',
+        },
+      ] satisfies LoanSnapshotItem[]),
+      itemCount: 1,
+      note: '印社借展，点交时逐方核对印谱快照',
+      createdAt: now - day * 11,
+      updatedAt: now - day * 11,
+    },
+    {
+      id: 'loan_seed_02',
+      batchNo: 'LOAN-20260801-001',
+      borrower: '杭州篆刻艺术馆',
+      eventName: '印学交流邀请展',
+      loanDate: '2026-08-01',
+      expectedReturnDate: '2026-08-30',
+      status: 'returned',
+      sealSnapshot: JSON.stringify([
+        {
+          stoneId: 'stone_01',
+          stoneName: '寿山黄芙蓉方章',
+          stoneType: 'shoushan',
+          sizeMm: '25×25×62',
+          catalogOrderNo: 1,
+          sealText: '澄怀观道',
+          annotation: '宗炳《画山水序》语，四字朱文',
+          style: 'zhu',
+          bestGrade: 'excellent',
+        },
+      ] satisfies LoanSnapshotItem[]),
+      itemCount: 1,
+      note: '展后归还，逐方核对',
+      createdAt: now - day * 66,
+      updatedAt: now - day * 37,
+    },
+  ];
+
+  const loanItems: LoanItem[] = [
+    {
+      id: 'litem_seed_0101',
+      batchId: 'loan_seed_01',
+      stoneId: 'stone_03',
+      catalogId: 'cata_0301',
+      designId: 'design_0301',
+      sealText: '金石为开',
+      status: 'lent',
+      damage: '',
+      maintenance: '',
+      returnedAt: '',
+      createdAt: now - day * 11,
+      updatedAt: now - day * 11,
+    },
+    {
+      id: 'litem_seed_0201',
+      batchId: 'loan_seed_02',
+      stoneId: 'stone_01',
+      catalogId: 'cata_0101',
+      designId: 'design_0101',
+      sealText: '澄怀观道',
+      status: 'returned',
+      damage: '锦盒角部轻微磕碰，印面无损',
+      maintenance: '已核对印面与边款无损，磕碰处打蜡养护，锦盒更换后入库存放',
+      returnedAt: '2026-08-30',
+      createdAt: now - day * 66,
+      updatedAt: now - day * 37,
+    },
+  ];
+
+  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs, db.loanBatches, db.loanItems], async () => {
     await db.stones.bulkPut(stones);
     await db.designs.bulkPut(designs);
     await db.carves.bulkPut(carves);
     await db.impressions.bulkPut(impressions);
     await db.catalogs.bulkPut(catalogs);
+    await db.loanBatches.bulkPut(loanBatches);
+    await db.loanItems.bulkPut(loanItems);
   });
 }
 
@@ -261,15 +383,21 @@ export interface SealCarveSnapshot {
   carves: Carve[];
   impressions: Impression[];
   catalogs: Catalog[];
+  /** 借展批次（旧备份可能缺省，导入时按空集合兼容） */
+  loanBatches?: LoanBatch[];
+  /** 借展条目（旧备份可能缺省，导入时按空集合兼容） */
+  loanItems?: LoanItem[];
 }
 
 export async function exportSnapshot(): Promise<SealCarveSnapshot> {
-  const [stones, designs, carves, impressions, catalogs] = await Promise.all([
+  const [stones, designs, carves, impressions, catalogs, loanBatches, loanItems] = await Promise.all([
     db.stones.toArray(),
     db.designs.toArray(),
     db.carves.toArray(),
     db.impressions.toArray(),
     db.catalogs.toArray(),
+    db.loanBatches.toArray(),
+    db.loanItems.toArray(),
   ]);
   return {
     app: DB_NAME,
@@ -280,6 +408,8 @@ export async function exportSnapshot(): Promise<SealCarveSnapshot> {
     carves,
     impressions,
     catalogs,
+    loanBatches,
+    loanItems,
   };
 }
 
@@ -292,29 +422,35 @@ export function validateSnapshot(input: unknown): string {
   for (const key of keys) {
     if (!Array.isArray(snapshot[key])) return `备份文件缺少 ${String(key)} 集合`;
   }
+  // 借展批次 / 条目为可选集合：旧备份没有时不报错，导入时按空集合兼容
   return '';
 }
 
 export async function clearAllTables(): Promise<void> {
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
+  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs, db.loanBatches, db.loanItems], async () => {
     await Promise.all([
       db.stones.clear(),
       db.designs.clear(),
       db.carves.clear(),
       db.impressions.clear(),
       db.catalogs.clear(),
+      db.loanBatches.clear(),
+      db.loanItems.clear(),
     ]);
   });
 }
 
 export async function importSnapshot(snapshot: SealCarveSnapshot): Promise<void> {
   await clearAllTables();
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
+  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs, db.loanBatches, db.loanItems], async () => {
     await db.stones.bulkPut(snapshot.stones);
     await db.designs.bulkPut(snapshot.designs);
     await db.carves.bulkPut(snapshot.carves);
     await db.impressions.bulkPut(snapshot.impressions);
     await db.catalogs.bulkPut(snapshot.catalogs);
+    // 旧备份缺少借展集合时按空集合兼容（缺字段按未借出）
+    await db.loanBatches.bulkPut(snapshot.loanBatches ?? []);
+    await db.loanItems.bulkPut(snapshot.loanItems ?? []);
   });
 }
 
@@ -324,14 +460,16 @@ export async function resetDatabase(): Promise<void> {
 }
 
 export async function countAll(): Promise<Record<string, number>> {
-  const [stones, designs, carves, impressions, catalogs] = await Promise.all([
+  const [stones, designs, carves, impressions, catalogs, loanBatches, loanItems] = await Promise.all([
     db.stones.count(),
     db.designs.count(),
     db.carves.count(),
     db.impressions.count(),
     db.catalogs.count(),
+    db.loanBatches.count(),
+    db.loanItems.count(),
   ]);
-  return { stones, designs, carves, impressions, catalogs };
+  return { stones, designs, carves, impressions, catalogs, loanBatches, loanItems };
 }
 
 /** 级联删除印石 → 印稿 → 工序 / 钤印 / 印谱条目 */

@@ -29,6 +29,7 @@
     updateImpression,
   } from '$lib/stores/impressionStore';
   import { currentDesignId, designs, setCurrentDesign } from '$lib/stores/designStore';
+  import { lockedStoneIds } from '$lib/stores/loanStore';
   import {
     GRADE_COLOR,
     GRADE_LABEL,
@@ -57,6 +58,7 @@
 
   const activeDesignId = $derived($currentDesignId ?? $designs[0]?.id ?? '');
   const activeDesign = $derived($designs.find((design) => design.id === activeDesignId) ?? null);
+  const isLocked = $derived(activeDesign !== null && $lockedStoneIds.has(activeDesign.stoneId));
   const list = $derived(impressionsOfDesign(activeDesignId));
 
   const totals = $derived({
@@ -86,6 +88,16 @@
   let draft = $state<ImpressionDraft>(createEmptyImpressionDraft(''));
   let pendingDelete = $state<Impression | null>(null);
   let toast = $state('');
+  let pageError = $state('');
+
+  async function guard(fn: () => Promise<unknown>): Promise<void> {
+    pageError = '';
+    try {
+      await fn();
+    } catch (err) {
+      pageError = err instanceof Error ? err.message : '操作失败';
+    }
+  }
 
   function openCreate(): void {
     if (!activeDesignId) return;
@@ -109,19 +121,24 @@
   }
 
   async function submit(): Promise<void> {
-    if (editing) {
-      await updateImpression(editing.id, { ...draft });
-      editing = null;
-    } else {
-      await createImpression({ ...draft });
-    }
-    dialogOpen = false;
+    await guard(async () => {
+      if (editing) {
+        await updateImpression(editing.id, { ...draft });
+        editing = null;
+      } else {
+        await createImpression({ ...draft });
+      }
+      dialogOpen = false;
+    });
   }
 
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete) return;
-    await removeImpression(pendingDelete.id);
-    pendingDelete = null;
+    const target = pendingDelete;
+    await guard(async () => {
+      await removeImpression(target.id);
+      pendingDelete = null;
+    });
   }
 
   async function adoptBest(): Promise<void> {
@@ -149,13 +166,21 @@
           <option value={design.id}>{design.sealText} · {DESIGN_STYLE_LABEL[design.style]}</option>
         {/each}
       </select>
-      <button class="gb-btn" disabled={list.length === 0} onclick={() => void adoptBest()}>回填采用稿效果</button>
-      <button class="gb-btn-primary" onclick={openCreate}>登记钤印</button>
+      <button class="gb-btn" disabled={isLocked || list.length === 0} onclick={() => void guard(adoptBest)}>回填采用稿效果</button>
+      <button class="gb-btn-primary" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={openCreate}>登记钤印</button>
     </div>
   </div>
 
   {#if toast}
     <div class="rounded-xl border border-jade/40 bg-jade/10 px-4 py-2 text-sm text-jade">{toast}</div>
+  {/if}
+  {#if isLocked}
+    <div class="rounded-xl border border-seal/40 bg-seal/10 px-4 py-2 text-sm text-seal">
+      该印石处于借展借出期间，钤印记录已锁定只读；归还后可继续登记与编辑。
+    </div>
+  {/if}
+  {#if pageError}
+    <div class="rounded-xl border border-seal/40 bg-seal/10 px-4 py-2 text-sm text-seal">{pageError}</div>
   {/if}
 
   {#if activeDesign}
@@ -224,8 +249,8 @@
 
           <div class="mt-3 flex flex-wrap gap-2">
             {#if isBest}<span class="gb-tag" style="color:#3f6b57;border-color:#3f6b5766">当前最佳</span>{/if}
-            <button class="gb-btn" onclick={() => openEdit(impression)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = impression)}>删除</button>
+            <button class="gb-btn" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => openEdit(impression)}>编辑</button>
+            <button class="gb-btn-danger" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => (pendingDelete = impression)}>删除</button>
           </div>
         </article>
       {/each}

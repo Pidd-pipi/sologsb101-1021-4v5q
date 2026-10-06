@@ -61,11 +61,17 @@ export async function loadStones(): Promise<void> {
   try {
     const rows = await db.stones.toArray();
     rows.sort((a, b) => b.updatedAt - a.updatedAt);
-    stones.set(rows);
+    // 旧档案缺借出字段时按未借出兼容（归一化为 false / null）
+    const normalized = rows.map((stone) => ({
+      ...stone,
+      lentOut: stone.lentOut === true,
+      currentLoanId: typeof stone.currentLoanId === 'string' ? stone.currentLoanId : null,
+    }));
+    stones.set(normalized);
     stoneError.set('');
     stoneReady.set(true);
     const current = get(currentStoneId);
-    if (current !== null && !rows.some((stone) => stone.id === current)) currentStoneId.set(null);
+    if (current !== null && !normalized.some((stone) => stone.id === current)) currentStoneId.set(null);
   } catch (err) {
     stoneError.set(err instanceof Error ? err.message : '印石读取失败');
     stoneReady.set(true);

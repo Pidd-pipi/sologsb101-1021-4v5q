@@ -27,6 +27,10 @@ export interface Stone {
   purchaseDate: string;
   /** 当前状态 */
   state: StoneState;
+  /** 是否处于借展借出状态（旧档案缺字段时按 false 兼容） */
+  lentOut: boolean;
+  /** 当前所在借展批次 id，未借出为 null */
+  currentLoanId: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -102,6 +106,8 @@ export function createEmptyStoneDraft(): StoneDraft {
     knobStyle: 'flat',
     purchaseDate: new Date().toISOString().slice(0, 10),
     state: 'carving',
+    lentOut: false,
+    currentLoanId: null,
   };
 }
 

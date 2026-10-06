@@ -34,6 +34,7 @@
   } from '$lib/stores/designStore';
   import { currentStoneId, setCurrentStone, stones } from '$lib/stores/stoneStore';
   import { impressions, bestImpressionOf } from '$lib/stores/impressionStore';
+  import { lockedStoneIds } from '$lib/stores/loanStore';
   import {
     BORDER_STYLE_LABEL,
     BORDER_STYLE_OPTIONS,
@@ -90,6 +91,7 @@
   let editing = $state<Design | null>(null);
   let draft = $state<DesignDraft>(createEmptyDesignDraft(''));
   let pendingDelete = $state<Design | null>(null);
+  let pageError = $state('');
 
   function openCreate(): void {
     const stoneId = activeStoneId;
@@ -115,19 +117,30 @@
 
   async function submit(): Promise<void> {
     if (draft.sealText.trim().length === 0) return;
-    if (editing) {
-      await updateDesign(editing.id, { ...draft });
-      editing = null;
-    } else {
-      await createDesign({ ...draft });
+    pageError = '';
+    try {
+      if (editing) {
+        await updateDesign(editing.id, { ...draft });
+        editing = null;
+      } else {
+        await createDesign({ ...draft });
+      }
+      dialogOpen = false;
+    } catch (err) {
+      pageError = err instanceof Error ? err.message : '保存失败';
     }
-    dialogOpen = false;
   }
 
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete) return;
-    await removeDesign(pendingDelete.id);
-    pendingDelete = null;
+    pageError = '';
+    try {
+      await removeDesign(pendingDelete.id);
+      pendingDelete = null;
+    } catch (err) {
+      pageError = err instanceof Error ? err.message : '删除失败';
+      pendingDelete = null;
+    }
   }
 </script>
 
@@ -164,6 +177,10 @@
     <StatBadge label="白文" value={totals.bai} suffix="稿" tone="ink" />
     <StatBadge label="钤印次数" value={totals.stamped} suffix="次" />
   </div>
+
+  {#if pageError}
+    <div class="rounded-xl border border-seal/40 bg-seal/10 px-4 py-2 text-sm text-seal">{pageError}</div>
+  {/if}
 
   <FilterBar
     keyword={$designFilters.keyword}
@@ -214,6 +231,9 @@
               <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">{DESIGN_STYLE_LABEL[design.style]}</span>
               <span class="text-lg font-semibold tracking-[0.2em] text-ink">{design.sealText}</span>
               {#if design.adopted}<span class="gb-tag" style="color:#3f6b57;border-color:#3f6b5766">采用稿</span>{/if}
+              {#if $lockedStoneIds.has(design.stoneId)}
+                <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66;background:#9c2b1f1a">借展中 · 已锁定</span>
+              {/if}
             </div>
             <span class="text-xs text-ink-soft">{BORDER_STYLE_LABEL[design.borderStyle]}</span>
           </header>
@@ -244,12 +264,12 @@
               <button class="gb-btn" onclick={() => setCurrentDesign(design.id)}>设为当前</button>
             {/if}
             {#if !design.adopted}
-              <button class="gb-btn" onclick={() => void adoptDesign(design.id)}>设为采用稿</button>
+              <button class="gb-btn" disabled={$lockedStoneIds.has(design.stoneId)} title={$lockedStoneIds.has(design.stoneId) ? '借展期间锁定' : ''} onclick={() => void adoptDesign(design.id)}>设为采用稿</button>
             {/if}
             <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/carve'))}>排工序</button>
             <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/impressions'))}>去钤印</button>
-            <button class="gb-btn" onclick={() => openEdit(design)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = design)}>删除</button>
+            <button class="gb-btn" disabled={$lockedStoneIds.has(design.stoneId)} title={$lockedStoneIds.has(design.stoneId) ? '借展期间锁定' : ''} onclick={() => openEdit(design)}>编辑</button>
+            <button class="gb-btn-danger" disabled={$lockedStoneIds.has(design.stoneId)} title={$lockedStoneIds.has(design.stoneId) ? '借展期间锁定' : ''} onclick={() => (pendingDelete = design)}>删除</button>
           </div>
         </article>
       {/each}

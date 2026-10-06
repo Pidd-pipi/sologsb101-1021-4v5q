@@ -27,6 +27,7 @@
   } from '$lib/stores/carveStore';
   import { currentDesignId, designs, setCurrentDesign } from '$lib/stores/designStore';
   import { stones } from '$lib/stores/stoneStore';
+  import { lockedStoneIds } from '$lib/stores/loanStore';
   import {
     CARVE_STATE_COLOR,
     CARVE_STATE_LABEL,
@@ -47,6 +48,7 @@
 
   const activeDesignId = $derived($currentDesignId ?? $designs[0]?.id ?? '');
   const activeDesign = $derived($designs.find((design) => design.id === activeDesignId) ?? null);
+  const isLocked = $derived(activeDesign !== null && $lockedStoneIds.has(activeDesign.stoneId));
   const stoneName = $derived(
     stones ? ($stones.find((stone) => stone.id === activeDesign?.stoneId)?.name ?? '—') : '—',
   );
@@ -86,6 +88,16 @@
   let pendingDelete = $state<Carve | null>(null);
   let selectedIds = $state<string[]>([]);
   let dragId = $state('');
+  let pageError = $state('');
+
+  async function guard(fn: () => Promise<unknown>): Promise<void> {
+    pageError = '';
+    try {
+      await fn();
+    } catch (err) {
+      pageError = err instanceof Error ? err.message : '操作失败';
+    }
+  }
 
   function openCreate(): void {
     if (!activeDesignId) return;
@@ -108,20 +120,25 @@
   }
 
   async function submit(): Promise<void> {
-    if (editing) {
-      await updateCarve(editing.id, { ...draft });
-      editing = null;
-    } else {
-      await createCarve({ ...draft });
-    }
-    dialogOpen = false;
-    selectedIds = [];
+    await guard(async () => {
+      if (editing) {
+        await updateCarve(editing.id, { ...draft });
+        editing = null;
+      } else {
+        await createCarve({ ...draft });
+      }
+      dialogOpen = false;
+      selectedIds = [];
+    });
   }
 
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete) return;
-    await removeCarve(pendingDelete.id);
-    pendingDelete = null;
+    const target = pendingDelete;
+    await guard(async () => {
+      await removeCarve(target.id);
+      pendingDelete = null;
+    });
   }
 
   async function generate(): Promise<void> {
@@ -180,13 +197,22 @@
           </option>
         {/each}
       </select>
-      <button class="gb-btn" onclick={() => void generate()}>生成标准序列</button>
-      <button class="gb-btn" disabled={selectedIds.length === 0} onclick={() => void batchDone()}>
+      <button class="gb-btn" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => void guard(generate)}>生成标准序列</button>
+      <button class="gb-btn" disabled={isLocked || selectedIds.length === 0} onclick={() => void guard(batchDone)}>
         批量完成（{selectedIds.length}）
       </button>
-      <button class="gb-btn-primary" onclick={openCreate}>新增工序</button>
+      <button class="gb-btn-primary" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={openCreate}>新增工序</button>
     </div>
   </div>
+
+  {#if isLocked}
+    <div class="rounded-xl border border-seal/40 bg-seal/10 px-4 py-2 text-sm text-seal">
+      该印石处于借展借出期间，刻制工序已锁定只读；归还后可继续编辑。
+    </div>
+  {/if}
+  {#if pageError}
+    <div class="rounded-xl border border-seal/40 bg-seal/10 px-4 py-2 text-sm text-seal">{pageError}</div>
+  {/if}
 
   {#if activeDesign}
     <div class="gb-panel flex flex-wrap items-center gap-3 text-sm text-ink-soft">
@@ -233,16 +259,17 @@
       {#each steps as step (step.id)}
         <div
           class="gb-panel flex flex-wrap items-center gap-3 {dragId === step.id ? 'opacity-50' : ''}"
-          draggable="true"
+          draggable={!isLocked}
           ondragstart={() => (dragId = step.id)}
           ondragover={(event) => event.preventDefault()}
-          ondrop={() => void handleDrop(step.id)}
+          ondrop={() => void guard(() => handleDrop(step.id))}
           role="listitem"
         >
-          <span class="cursor-grab text-ink-soft" title="按住拖动可调整工序先后">⋮⋮</span>
+          <span class="cursor-grab text-ink-soft" title={isLocked ? '借展期间锁定' : '按住拖动可调整工序先后'}>⋮⋮</span>
           <input
             type="checkbox"
             checked={selectedIds.includes(step.id)}
+            disabled={isLocked}
             onchange={() => toggleSelect(step.id)}
             aria-label="选择工序"
           />
@@ -256,11 +283,11 @@
           <span class="text-sm text-ink-soft">{step.minutes} 分钟 · {step.operator || '未填执刀人'}</span>
 
           <div class="ml-auto flex flex-wrap gap-1">
-            <button class="gb-btn" onclick={() => void move(step, -1)} title="上移">↑</button>
-            <button class="gb-btn" onclick={() => void move(step, 1)} title="下移">↓</button>
-            <button class="gb-btn" onclick={() => void advanceCarve(step.id)}>推进状态</button>
-            <button class="gb-btn" onclick={() => openEdit(step)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = step)}>删除</button>
+            <button class="gb-btn" disabled={isLocked} onclick={() => void guard(() => move(step, -1))} title="上移">↑</button>
+            <button class="gb-btn" disabled={isLocked} onclick={() => void guard(() => move(step, 1))} title="下移">↓</button>
+            <button class="gb-btn" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => void guard(() => advanceCarve(step.id))}>推进状态</button>
+            <button class="gb-btn" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => openEdit(step)}>编辑</button>
+            <button class="gb-btn-danger" disabled={isLocked} title={isLocked ? '借展期间锁定' : ''} onclick={() => (pendingDelete = step)}>删除</button>
           </div>
         </div>
       {/each}

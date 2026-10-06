@@ -11,6 +11,7 @@
   import { designs, loadDesigns } from '$lib/stores/designStore';
   import { carves, loadCarves } from '$lib/stores/carveStore';
   import { impressions, loadImpressions } from '$lib/stores/impressionStore';
+  import { loadLoans, loanBatches, loanItems } from '$lib/stores/loanStore';
   import { useIdbTable } from '$lib/hooks/useIdbTable';
   import type { Catalog } from '$lib/types/catalog';
 
@@ -26,7 +27,7 @@
   onMount(async () => {
     try {
       await initDatabase();
-      await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions()]);
+      await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), loadLoans()]);
     } catch (error) {
       errorText = error instanceof Error ? error.message : '本地数据库初始化失败';
     } finally {
@@ -82,7 +83,7 @@
     <span>数据仅保存在本机浏览器（IndexedDB / localStorage），不上传任何服务器。</span>
     <span>
       印石 {$stones.length} 方 · 印稿 {$designs.length} 稿 · 工序 {$carves.length} 道 · 钤印
-      {$impressions.length} 次 · 谱录 {$catalogRows.length} 条
+      {$impressions.length} 次 · 谱录 {$catalogRows.length} 条 · 借展 {$loanBatches.length} 批 / {$loanItems.length} 方
     </span>
   </footer>
 </div>
