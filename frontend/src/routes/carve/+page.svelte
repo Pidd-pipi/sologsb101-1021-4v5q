@@ -64,6 +64,7 @@
   );
 
   const progress = $derived(progressOfDesign($progressByDesign, activeDesignId));
+  const activeLocked = $derived(activeDesign?.loanLocked === true);
 
   function updateQuery(patch: Record<string, string | string[] | undefined>): void {
     const merged: Record<string, string[]> = { ...parseQuery(router.querystring ?? '') };
@@ -180,11 +181,11 @@
           </option>
         {/each}
       </select>
-      <button class="gb-btn" onclick={() => void generate()}>生成标准序列</button>
-      <button class="gb-btn" disabled={selectedIds.length === 0} onclick={() => void batchDone()}>
+      <button class="gb-btn" disabled={activeLocked} onclick={() => void generate()}>生成标准序列</button>
+      <button class="gb-btn" disabled={selectedIds.length === 0 || activeLocked} onclick={() => void batchDone()}>
         批量完成（{selectedIds.length}）
       </button>
-      <button class="gb-btn-primary" onclick={openCreate}>新增工序</button>
+      <button class="gb-btn-primary" disabled={activeLocked} onclick={openCreate}>新增工序</button>
     </div>
   </div>
 
@@ -194,6 +195,7 @@
       <span>印石：{stoneName}</span>
       <span>{DESIGN_STYLE_LABEL[activeDesign.style]}</span>
       <span>释文：{activeDesign.annotation || '未填写'}</span>
+      {#if activeLocked}<span class="text-seal">借展中 · 工序锁定只读，归还核还后恢复</span>{/if}
     </div>
   {/if}
 
@@ -233,16 +235,17 @@
       {#each steps as step (step.id)}
         <div
           class="gb-panel flex flex-wrap items-center gap-3 {dragId === step.id ? 'opacity-50' : ''}"
-          draggable="true"
-          ondragstart={() => (dragId = step.id)}
+          draggable={activeLocked ? 'false' : 'true'}
+          ondragstart={() => !activeLocked && (dragId = step.id)}
           ondragover={(event) => event.preventDefault()}
           ondrop={() => void handleDrop(step.id)}
           role="listitem"
         >
-          <span class="cursor-grab text-ink-soft" title="按住拖动可调整工序先后">⋮⋮</span>
+          <span class="cursor-grab text-ink-soft {activeLocked ? 'opacity-30' : ''}" title="按住拖动可调整工序先后">⋮⋮</span>
           <input
             type="checkbox"
             checked={selectedIds.includes(step.id)}
+            disabled={activeLocked}
             onchange={() => toggleSelect(step.id)}
             aria-label="选择工序"
           />
@@ -256,11 +259,11 @@
           <span class="text-sm text-ink-soft">{step.minutes} 分钟 · {step.operator || '未填执刀人'}</span>
 
           <div class="ml-auto flex flex-wrap gap-1">
-            <button class="gb-btn" onclick={() => void move(step, -1)} title="上移">↑</button>
-            <button class="gb-btn" onclick={() => void move(step, 1)} title="下移">↓</button>
-            <button class="gb-btn" onclick={() => void advanceCarve(step.id)}>推进状态</button>
-            <button class="gb-btn" onclick={() => openEdit(step)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = step)}>删除</button>
+            <button class="gb-btn" disabled={activeLocked} onclick={() => void move(step, -1)} title="上移">↑</button>
+            <button class="gb-btn" disabled={activeLocked} onclick={() => void move(step, 1)} title="下移">↓</button>
+            <button class="gb-btn" disabled={activeLocked} onclick={() => void advanceCarve(step.id)}>推进状态</button>
+            <button class="gb-btn" disabled={activeLocked} onclick={() => openEdit(step)}>编辑</button>
+            <button class="gb-btn-danger" disabled={activeLocked} onclick={() => (pendingDelete = step)}>删除</button>
           </div>
         </div>
       {/each}

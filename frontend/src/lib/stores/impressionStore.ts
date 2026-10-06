@@ -12,6 +12,7 @@ import {
   type PaperKind,
 } from '$lib/types/impression';
 import { adoptDesign, designById, updateDesign } from './designStore';
+import { assertUnlocked } from '$lib/utils/lock';
 
 export interface ImpressionFilters {
   keyword: string;
@@ -99,6 +100,7 @@ export function resetImpressionFilters(): void {
 }
 
 export async function createImpression(draft: ImpressionDraft): Promise<Impression> {
+  assertUnlocked(designById(draft.designId), '该印稿的钤印记录');
   const now = Date.now();
   const row: Impression = { ...draft, id: createId('impr'), createdAt: now, updatedAt: now };
   await db.impressions.put(row);
@@ -107,11 +109,15 @@ export async function createImpression(draft: ImpressionDraft): Promise<Impressi
 }
 
 export async function updateImpression(id: string, patch: Partial<Impression>): Promise<void> {
+  const existing = get(impressions).find((impression) => impression.id === id);
+  if (existing) assertUnlocked(existing, '该钤印记录');
   await db.impressions.update(id, { ...patch, updatedAt: Date.now() } as never);
   await loadImpressions();
 }
 
 export async function removeImpression(id: string): Promise<void> {
+  const existing = get(impressions).find((impression) => impression.id === id);
+  if (existing) assertUnlocked(existing, '该钤印记录');
   await db.impressions.delete(id);
   await loadImpressions();
 }
@@ -120,6 +126,7 @@ export async function removeImpression(id: string): Promise<void> {
  * 一键回填为采用稿效果：把该印稿评级最高的一条标记为采用效果，并把印稿置为采用稿。
  */
 export async function applyBestAsAdopted(designId: string): Promise<Impression | undefined> {
+  assertUnlocked(designById(designId), '该印稿');
   const best = bestImpressionOf(designId);
   if (!best) return undefined;
   const now = Date.now();

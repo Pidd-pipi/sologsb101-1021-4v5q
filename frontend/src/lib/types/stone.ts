@@ -27,6 +27,10 @@ export interface Stone {
   purchaseDate: string;
   /** 当前状态 */
   state: StoneState;
+  /** 借展点交锁定：出库中为 true（旧档案缺字段按未借出处理） */
+  loanLocked?: boolean;
+  /** 所属借展批次 id（借出期间回写，归还完好后清空） */
+  loanBatchId?: string;
   createdAt: number;
   updatedAt: number;
 }

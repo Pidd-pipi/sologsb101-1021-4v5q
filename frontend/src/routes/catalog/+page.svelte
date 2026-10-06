@@ -12,6 +12,7 @@
   import { carves, loadCarves } from '$lib/stores/carveStore';
   import { impressions, loadImpressions, bestImpressionOf } from '$lib/stores/impressionStore';
   import { loadStones, stones } from '$lib/stores/stoneStore';
+  import { activeBatchOfStone, loadLoanBatches } from '$lib/stores/loanStore';
   import {
     INCLUDED_COLOR,
     INCLUDED_OPTIONS,
@@ -93,29 +94,48 @@
     return $stones.find((stone) => stone.id === stoneId)?.name ?? '（印石已删除）';
   }
 
+  /** 借出锁定的印谱条目只读（旧档案缺 loanLocked 字段按未锁定兼容） */
+  function entryLocked(entry: Catalog): boolean {
+    return entry.loanLocked === true;
+  }
+
   function showToast(text: string): void {
     toast = text;
     setTimeout(() => (toast = ''), 2600);
   }
 
   async function move(entry: Catalog, delta: number): Promise<void> {
+    if (entryLocked(entry)) {
+      showToast('该条目随印石借展中，排序已锁定');
+      return;
+    }
     const list = ordered;
     const index = list.findIndex((item) => item.id === entry.id);
     const target = index + delta;
     if (index < 0 || target < 0 || target >= list.length) return;
+    // 跨过任一出锁条目也不允许（会改动锁定条目的序号）
     const reordered = [...list];
     const [moved] = reordered.splice(index, 1);
     reordered.splice(target, 0, moved as Catalog);
+    if (reordered.some((item, position) => item.orderNo !== position + 1 && entryLocked(item))) {
+      showToast('借展中的印谱条目序号锁定，不能跨其调整');
+      return;
+    }
     const now = Date.now();
     await catalogTable.bulkPut(reordered.map((item, position) => ({ ...item, orderNo: position + 1, updatedAt: now })));
     showToast('排序已更新并重编号');
   }
 
   async function setIncluded(entry: Catalog, included: IncludedStatus): Promise<void> {
+    if (entryLocked(entry)) {
+      showToast('该条目随印石借展中，收录状态已锁定');
+      return;
+    }
     await catalogTable.update(entry.id, { included });
   }
 
   async function saveNote(entry: Catalog, note: string): Promise<void> {
+    if (entryLocked(entry)) return;
     await catalogTable.update(entry.id, { note });
   }
 
@@ -123,12 +143,15 @@
     if (!pendingDelete) return;
     await catalogTable.remove(pendingDelete.id);
     const rest = ordered.filter((item) => item.id !== pendingDelete?.id);
-    const now = Date.now();
-    if (rest.length > 0) {
-      await catalogTable.bulkPut(rest.map((item, index) => ({ ...item, orderNo: index + 1, updatedAt: now })));
+    if (rest.some((item) => entryLocked(item))) {
+      showToast('已删除；因借展条目序号锁定，暂不重编号');
+    } else {
+      const now = Date.now();
+      if (rest.length > 0) {
+        await catalogTable.bulkPut(rest.map((item, index) => ({ ...item, orderNo: index + 1, updatedAt: now })));
+      }
     }
     pendingDelete = null;
-    showToast('已删除并重编号');
   }
 
   function openCreate(): void {
@@ -180,14 +203,14 @@
     }
     if (!window.confirm('导入会清空当前浏览器中的全部档案，再写入备份内容，操作不可撤销。是否继续？')) return;
     await importSnapshot(parsed as SealCarveSnapshot);
-    await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), catalogTable.refresh()]);
+    await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), loadLoanBatches(), catalogTable.refresh()]);
     showToast('导入完成，数据已覆盖');
   }
 
   async function handleReset(): Promise<void> {
     if (!window.confirm('会删除当前浏览器中的全部档案并恢复演示数据，不可撤销。是否继续？')) return;
     await resetDatabase();
-    await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), catalogTable.refresh()]);
+    await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), loadLoanBatches(), catalogTable.refresh()]);
     showToast('已清空并重新载入演示数据');
   }
 </script>
@@ -252,27 +275,35 @@
         <tbody>
           {#each ordered as entry, index (entry.id)}
             {@const best = bestImpressionOf(entry.designId)}
-            <tr>
+            {@const locked = entryLocked(entry)}
+            {@const loan = activeBatchOfStone(entry.stoneId)}
+            <tr class={locked ? 'bg-seal/[0.04]' : ''}>
               <td class="whitespace-nowrap">
                 <div class="flex items-center gap-1">
                   <span class="tabular-nums">{entry.orderNo}</span>
-                  <button class="gb-btn px-2 py-0.5" disabled={index === 0} onclick={() => void move(entry, -1)}>↑</button>
+                  <button class="gb-btn px-2 py-0.5" disabled={index === 0 || locked} onclick={() => void move(entry, -1)}>↑</button>
                   <button
                     class="gb-btn px-2 py-0.5"
-                    disabled={index === ordered.length - 1}
+                    disabled={index === ordered.length - 1 || locked}
                     onclick={() => void move(entry, 1)}
                   >
                     ↓
                   </button>
                 </div>
               </td>
-              <td>{designText(entry.designId)}</td>
+              <td>
+                {designText(entry.designId)}
+                {#if locked}
+                  <div class="mt-0.5 text-xs text-seal">借展锁定 · {loan ? `${loan.borrower}（归还日 ${loan.dueDate}）` : '借出中'}</div>
+                {/if}
+              </td>
               <td>{stoneText(entry.stoneId)}</td>
               <td>
                 <select
                   class="gb-input py-1"
                   style="color:{INCLUDED_COLOR[entry.included]}"
                   value={entry.included}
+                  disabled={locked}
                   onchange={(event) =>
                     void setIncluded(entry, (event.currentTarget as HTMLSelectElement).value as IncludedStatus)}
                 >
@@ -292,19 +323,24 @@
                 <input
                   class="gb-input py-1"
                   value={entry.note}
-                  placeholder="备注"
+                  placeholder={locked ? '借展中备注锁定' : '备注'}
+                  disabled={locked}
                   onchange={(event) => void saveNote(entry, (event.currentTarget as HTMLInputElement).value)}
                 />
               </td>
               <td>
                 <div class="flex flex-wrap gap-1">
-                  <button
-                    class="gb-btn px-2 py-1"
-                    onclick={() => void setIncluded(entry, entry.included === 'included' ? 'pending' : 'included')}
-                  >
-                    {entry.included === 'included' ? '取消收录' : '标记收录'}
-                  </button>
-                  <button class="gb-btn-danger px-2 py-1" onclick={() => (pendingDelete = entry)}>删除</button>
+                  {#if locked}
+                    <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">借出只读</span>
+                  {:else}
+                    <button
+                      class="gb-btn px-2 py-1"
+                      onclick={() => void setIncluded(entry, entry.included === 'included' ? 'pending' : 'included')}
+                    >
+                      {entry.included === 'included' ? '取消收录' : '标记收录'}
+                    </button>
+                    <button class="gb-btn-danger px-2 py-1" onclick={() => (pendingDelete = entry)}>删除</button>
+                  {/if}
                 </div>
               </td>
             </tr>
@@ -337,7 +373,7 @@
     <section class="gb-panel space-y-3">
       <h3 class="text-base text-ink">整库导出</h3>
       <p class="text-sm text-ink-soft">
-        导出文件包含 5 张业务表全量数据与结构版本号（v{DB_VERSION}），可在其他设备通过「导入 JSON」还原。
+        导出文件包含 6 张业务表全量数据与结构版本号（v{DB_VERSION}，含借展批次与锁定状态），可在其他设备通过「导入 JSON」还原；旧版备份缺借展表时按未借出兼容。
       </p>
       <div class="flex flex-wrap gap-2">
         <button class="gb-btn" onclick={() => void handleExport()}>JSON 备份</button>

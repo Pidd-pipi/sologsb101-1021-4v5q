@@ -1,8 +1,9 @@
 /**
  * IndexedDB 持久化层（Dexie 封装）
  * - 数据结构版本号与升级迁移逻辑（v1 初版；v2 为 impressions 增加 grade 索引、
- *   为 catalogs 增加 orderNo 索引，并回填历史记录缺失字段）
- * - 五张业务表的增删改查与整库导入导出
+ *   为 catalogs 增加 orderNo 索引，并回填历史记录缺失字段；v3 增加借展批次表 loans，
+ *   并为 stones/designs/carves/impressions/catalogs 增加借出锁定字段）
+ * - 六张业务表的增删改查与整库导入导出
  * - 首次打开自动播种三层互相引用的演示数据（幂等）
  * 纯前端应用：不依赖任何后端服务或数据库。
  */
@@ -12,18 +13,21 @@ import type { Design } from '$lib/types/design';
 import type { Carve } from '$lib/types/carve';
 import type { Impression } from '$lib/types/impression';
 import type { Catalog } from '$lib/types/catalog';
+import type { LoanBatch } from '$lib/types/loan';
 
 /** 数据库名（README 与导出文件均使用该名称） */
 export const DB_NAME = 'gbsealcarve';
 
 /** 当前数据结构版本号 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 /** localStorage 侧少量元数据键 */
 export const LS_KEYS = {
   dbVersion: 'gbsealcarve:db-version',
   lastBackupAt: 'gbsealcarve:last-backup-at',
   uiPrefs: 'gbsealcarve:ui-prefs',
+  /** 数据变更信号：跨标签通知（多标签同时点交时让其它标签刷新锁定状态） */
+  changeTick: 'gbsealcarve:change-tick',
 } as const;
 
 export interface UiPrefs {
@@ -63,6 +67,15 @@ export function stampDbVersion(): void {
   }
 }
 
+/** 通知其它标签本地数据已变更（借展点交 / 归还等整批事务后调用） */
+export function notifyDataChange(kind: string): void {
+  try {
+    localStorage.setItem(LS_KEYS.changeTick, `${kind}:${Date.now()}`);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function readLastBackupAt(): string | null {
   try {
     return localStorage.getItem(LS_KEYS.lastBackupAt);
@@ -85,6 +98,7 @@ class SealCarveDatabase extends Dexie {
   carves!: Table<Carve, string>;
   impressions!: Table<Impression, string>;
   catalogs!: Table<Catalog, string>;
+  loans!: Table<LoanBatch, string>;
 
   constructor() {
     super(DB_NAME);
@@ -99,7 +113,7 @@ class SealCarveDatabase extends Dexie {
     });
 
     // v2：补充检索索引并回填历史记录缺失字段
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         stones: 'id, name, stoneType, knobStyle, state, purchaseDate, updatedAt',
         designs: 'id, stoneId, style, borderStyle, adopted, updatedAt',
@@ -131,6 +145,16 @@ class SealCarveDatabase extends Dexie {
             if (!catalog.included) catalog.included = 'pending';
           });
       });
+
+    // v3：借展点交 —— 新增 loans 批次表，业务表补充借出锁定索引
+    this.version(DB_VERSION).stores({
+      stones: 'id, name, stoneType, knobStyle, state, purchaseDate, loanLocked, updatedAt',
+      designs: 'id, stoneId, style, borderStyle, adopted, loanLocked, updatedAt',
+      carves: 'id, designId, seq, knifeMethod, operator, state, loanLocked, updatedAt',
+      impressions: 'id, designId, grade, paperType, stampedAt, loanLocked, updatedAt',
+      catalogs: 'id, stoneId, designId, orderNo, included, loanLocked, updatedAt',
+      loans: 'id, batchNo, status, borrower, updatedAt',
+    });
   }
 }
 
@@ -261,15 +285,18 @@ export interface SealCarveSnapshot {
   carves: Carve[];
   impressions: Impression[];
   catalogs: Catalog[];
+  /** 借展批次（旧版备份缺该集合时按空数组兼容） */
+  loans?: LoanBatch[];
 }
 
 export async function exportSnapshot(): Promise<SealCarveSnapshot> {
-  const [stones, designs, carves, impressions, catalogs] = await Promise.all([
+  const [stones, designs, carves, impressions, catalogs, loans] = await Promise.all([
     db.stones.toArray(),
     db.designs.toArray(),
     db.carves.toArray(),
     db.impressions.toArray(),
     db.catalogs.toArray(),
+    db.loans.toArray(),
   ]);
   return {
     app: DB_NAME,
@@ -280,6 +307,7 @@ export async function exportSnapshot(): Promise<SealCarveSnapshot> {
     carves,
     impressions,
     catalogs,
+    loans,
   };
 }
 
@@ -296,26 +324,37 @@ export function validateSnapshot(input: unknown): string {
 }
 
 export async function clearAllTables(): Promise<void> {
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
-    await Promise.all([
-      db.stones.clear(),
-      db.designs.clear(),
-      db.carves.clear(),
-      db.impressions.clear(),
-      db.catalogs.clear(),
-    ]);
-  });
+  await db.transaction(
+    'rw',
+    [db.stones, db.designs, db.carves, db.impressions, db.catalogs, db.loans],
+    async () => {
+      await Promise.all([
+        db.stones.clear(),
+        db.designs.clear(),
+        db.carves.clear(),
+        db.impressions.clear(),
+        db.catalogs.clear(),
+        db.loans.clear(),
+      ]);
+    },
+  );
 }
 
 export async function importSnapshot(snapshot: SealCarveSnapshot): Promise<void> {
   await clearAllTables();
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
-    await db.stones.bulkPut(snapshot.stones);
-    await db.designs.bulkPut(snapshot.designs);
-    await db.carves.bulkPut(snapshot.carves);
-    await db.impressions.bulkPut(snapshot.impressions);
-    await db.catalogs.bulkPut(snapshot.catalogs);
-  });
+  await db.transaction(
+    'rw',
+    [db.stones, db.designs, db.carves, db.impressions, db.catalogs, db.loans],
+    async () => {
+      await db.stones.bulkPut(snapshot.stones);
+      await db.designs.bulkPut(snapshot.designs);
+      await db.carves.bulkPut(snapshot.carves);
+      await db.impressions.bulkPut(snapshot.impressions);
+      await db.catalogs.bulkPut(snapshot.catalogs);
+      // 旧档案（v2 及以前备份）没有 loans 集合，按空兼容
+      if (Array.isArray(snapshot.loans)) await db.loans.bulkPut(snapshot.loans);
+    },
+  );
 }
 
 export async function resetDatabase(): Promise<void> {
@@ -324,36 +363,47 @@ export async function resetDatabase(): Promise<void> {
 }
 
 export async function countAll(): Promise<Record<string, number>> {
-  const [stones, designs, carves, impressions, catalogs] = await Promise.all([
+  const [stones, designs, carves, impressions, catalogs, loans] = await Promise.all([
     db.stones.count(),
     db.designs.count(),
     db.carves.count(),
     db.impressions.count(),
     db.catalogs.count(),
+    db.loans.count(),
   ]);
-  return { stones, designs, carves, impressions, catalogs };
+  return { stones, designs, carves, impressions, catalogs, loans };
 }
 
-/** 级联删除印石 → 印稿 → 工序 / 钤印 / 印谱条目 */
+/** 借出锁定的印石禁止级联删除（须先归还核还） */
 export async function removeStoneCascade(stoneId: string): Promise<void> {
   const designIds = (await db.designs.where('stoneId').equals(stoneId).toArray()).map((row) => row.id);
-  await db.transaction('rw', [db.stones, db.designs, db.carves, db.impressions, db.catalogs], async () => {
-    if (designIds.length > 0) {
-      await db.carves.where('designId').anyOf(designIds).delete();
-      await db.impressions.where('designId').anyOf(designIds).delete();
-      await db.catalogs.where('designId').anyOf(designIds).delete();
-    }
-    await db.designs.where('stoneId').equals(stoneId).delete();
-    await db.catalogs.where('stoneId').equals(stoneId).delete();
-    await db.stones.delete(stoneId);
-  });
+  await db.transaction(
+    'rw',
+    [db.stones, db.designs, db.carves, db.impressions, db.catalogs],
+    async () => {
+      const stone = await db.stones.get(stoneId);
+      if (stone?.loanLocked) {
+        throw new Error(`「${stone.name}」正在借展中，归还核还前不能删除`);
+      }
+      if (designIds.length > 0) {
+        await db.carves.where('designId').anyOf(designIds).delete();
+        await db.impressions.where('designId').anyOf(designIds).delete();
+        await db.catalogs.where('designId').anyOf(designIds).delete();
+      }
+      await db.designs.where('stoneId').equals(stoneId).delete();
+      await db.catalogs.where('stoneId').equals(stoneId).delete();
+      await db.stones.delete(stoneId);
+    },
+  );
 }
 
-/** 级联删除印稿 → 工序 / 钤印 / 印谱条目，并重编号印谱 */
+/** 借出锁定的印稿禁止级联删除 */
 export async function removeDesignCascade(designId: string): Promise<void> {
   const catalog = await db.catalogs.where('designId').equals(designId).toArray();
   const stoneId = catalog[0]?.stoneId;
   await db.transaction('rw', [db.designs, db.carves, db.impressions, db.catalogs], async () => {
+    const design = await db.designs.get(designId);
+    if (design?.loanLocked) throw new Error('该印稿随印石借展中，归还核还前不能删除');
     await db.carves.where('designId').equals(designId).delete();
     await db.impressions.where('designId').equals(designId).delete();
     await db.catalogs.where('designId').equals(designId).delete();

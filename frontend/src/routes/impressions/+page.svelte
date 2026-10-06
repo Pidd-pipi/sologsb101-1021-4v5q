@@ -57,6 +57,7 @@
 
   const activeDesignId = $derived($currentDesignId ?? $designs[0]?.id ?? '');
   const activeDesign = $derived($designs.find((design) => design.id === activeDesignId) ?? null);
+  const activeLocked = $derived(activeDesign?.loanLocked === true);
   const list = $derived(impressionsOfDesign(activeDesignId));
 
   const totals = $derived({
@@ -149,8 +150,8 @@
           <option value={design.id}>{design.sealText} · {DESIGN_STYLE_LABEL[design.style]}</option>
         {/each}
       </select>
-      <button class="gb-btn" disabled={list.length === 0} onclick={() => void adoptBest()}>回填采用稿效果</button>
-      <button class="gb-btn-primary" onclick={openCreate}>登记钤印</button>
+      <button class="gb-btn" disabled={list.length === 0 || activeLocked} onclick={() => void adoptBest()}>回填采用稿效果</button>
+      <button class="gb-btn-primary" disabled={activeLocked} onclick={openCreate}>登记钤印</button>
     </div>
   </div>
 
@@ -163,6 +164,7 @@
       <span class="text-ink">印文：{activeDesign.sealText}</span>
       <span>释文：{activeDesign.annotation || '未填写'}</span>
       <span>{activeDesign.adopted ? '已采用' : '未采用'}</span>
+      {#if activeLocked}<span class="text-seal">借展中 · 钤印记录锁定只读，归还核还后恢复</span>{/if}
       {#if bestImpressionOf(activeDesignId)}
         {@const best = bestImpressionOf(activeDesignId)}
         {#if best}
@@ -224,8 +226,12 @@
 
           <div class="mt-3 flex flex-wrap gap-2">
             {#if isBest}<span class="gb-tag" style="color:#3f6b57;border-color:#3f6b5766">当前最佳</span>{/if}
-            <button class="gb-btn" onclick={() => openEdit(impression)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = impression)}>删除</button>
+            {#if activeLocked}
+              <span class="text-xs text-seal">借展只读</span>
+            {:else}
+              <button class="gb-btn" onclick={() => openEdit(impression)}>编辑</button>
+              <button class="gb-btn-danger" onclick={() => (pendingDelete = impression)}>删除</button>
+            {/if}
           </div>
         </article>
       {/each}

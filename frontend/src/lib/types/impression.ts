@@ -28,6 +28,8 @@ export interface Impression {
   stampedAt: string;
   /** 备注（是否采用稿效果等） */
   note: string;
+  /** 借展点交锁定：所属印稿的印石借出期间只读 */
+  loanLocked?: boolean;
   createdAt: number;
   updatedAt: number;
 }

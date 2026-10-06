@@ -25,6 +25,8 @@ export interface Design {
   layoutNote: string;
   /** 是否采用稿 */
   adopted: boolean;
+  /** 借展点交锁定：所属印石借出期间只读 */
+  loanLocked?: boolean;
   createdAt: number;
   updatedAt: number;
 }

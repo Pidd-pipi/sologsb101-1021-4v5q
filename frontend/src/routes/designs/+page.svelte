@@ -34,6 +34,7 @@
   } from '$lib/stores/designStore';
   import { currentStoneId, setCurrentStone, stones } from '$lib/stores/stoneStore';
   import { impressions, bestImpressionOf } from '$lib/stores/impressionStore';
+  import { activeBatchOfStone } from '$lib/stores/loanStore';
   import {
     BORDER_STYLE_LABEL,
     BORDER_STYLE_OPTIONS,
@@ -208,15 +209,22 @@
       {#each list as design (design.id)}
         {@const progress = progressOfDesign($progressByDesign, design.id)}
         {@const best = bestImpressionOf(design.id)}
-        <article class="gb-panel {$currentDesignId === design.id ? 'ring-2 ring-seal/40' : ''}">
+        {@const loan = activeBatchOfStone(design.stoneId)}
+        {@const locked = design.loanLocked === true}
+        <article class="gb-panel {$currentDesignId === design.id ? 'ring-2 ring-seal/40' : ''} {locked ? 'ring-1 ring-seal/30' : ''}">
           <header class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex flex-wrap items-center gap-2">
               <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">{DESIGN_STYLE_LABEL[design.style]}</span>
               <span class="text-lg font-semibold tracking-[0.2em] text-ink">{design.sealText}</span>
               {#if design.adopted}<span class="gb-tag" style="color:#3f6b57;border-color:#3f6b5766">采用稿</span>{/if}
+              {#if locked}<span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">借展锁定</span>{/if}
             </div>
             <span class="text-xs text-ink-soft">{BORDER_STYLE_LABEL[design.borderStyle]}</span>
           </header>
+
+          {#if loan}
+            <div class="mt-2 text-xs text-seal">借出中：{loan.borrower} · 约定归还 {loan.dueDate}，印稿只读</div>
+          {/if}
 
           <div class="mt-3 gb-seal-preview border-seal/50 text-seal" style="border-style:{design.borderStyle === 'none'
             ? 'none'
@@ -243,13 +251,17 @@
             {#if $currentDesignId !== design.id}
               <button class="gb-btn" onclick={() => setCurrentDesign(design.id)}>设为当前</button>
             {/if}
-            {#if !design.adopted}
-              <button class="gb-btn" onclick={() => void adoptDesign(design.id)}>设为采用稿</button>
+            {#if locked}
+              <span class="text-xs text-seal">工序 / 钤印同步锁定</span>
+            {:else}
+              {#if !design.adopted}
+                <button class="gb-btn" onclick={() => void adoptDesign(design.id)}>设为采用稿</button>
+              {/if}
+              <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/carve'))}>排工序</button>
+              <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/impressions'))}>去钤印</button>
             {/if}
-            <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/carve'))}>排工序</button>
-            <button class="gb-btn" onclick={() => (setCurrentDesign(design.id), void push('/impressions'))}>去钤印</button>
-            <button class="gb-btn" onclick={() => openEdit(design)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = design)}>删除</button>
+            <button class="gb-btn" disabled={locked} title={locked ? '借出中印稿只读' : ''} onclick={() => openEdit(design)}>编辑</button>
+            <button class="gb-btn-danger" disabled={locked} title={locked ? '借出中不可删除' : ''} onclick={() => (pendingDelete = design)}>删除</button>
           </div>
         </article>
       {/each}

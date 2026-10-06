@@ -6,6 +6,7 @@ import { derived, get, writable } from 'svelte/store';
 import { createId, db, removeDesignCascade } from '$lib/utils/db';
 import type { BorderStyle, Design, DesignDraft, DesignStyle } from '$lib/types/design';
 import { readUiPrefs, writeUiPrefs } from '$lib/utils/db';
+import { assertUnlocked } from '$lib/utils/lock';
 
 export interface DesignFilters {
   keyword: string;
@@ -105,6 +106,8 @@ export function resetDesignFilters(): void {
 }
 
 export async function createDesign(draft: DesignDraft): Promise<Design> {
+  const stone = await db.stones.get(draft.stoneId);
+  assertUnlocked(stone, '该印石');
   const now = Date.now();
   const row: Design = { ...draft, id: createId('design'), createdAt: now, updatedAt: now };
   await db.designs.put(row);
@@ -117,6 +120,7 @@ export async function createDesign(draft: DesignDraft): Promise<Design> {
 
 export async function updateDesign(id: string, patch: Partial<Design>): Promise<void> {
   const existing = designById(id);
+  assertUnlocked(existing, '该印稿');
   await db.designs.update(id, { ...patch, updatedAt: Date.now() } as never);
   if (patch.adopted && existing) await clearOtherAdopted(existing.stoneId, id);
   await loadDesigns();

@@ -33,6 +33,7 @@
   import { designs, setCurrentDesign, designsOfStone } from '$lib/stores/designStore';
   import { carves } from '$lib/stores/carveStore';
   import { impressions } from '$lib/stores/impressionStore';
+  import { activeBatchOfStone, lockedStoneIds } from '$lib/stores/loanStore';
   import {
     KNOB_STYLE_LABEL,
     KNOB_STYLE_OPTIONS,
@@ -92,6 +93,7 @@
     carved: Object.values(statMap).reduce((sum, item) => sum + item.carvedCount, 0),
     idle: $stones.filter((stone) => stone.state === 'idle').length,
     impressions: $impressions.length,
+    loaned: $lockedStoneIds.size,
   });
 
   let dialogOpen = $state(false);
@@ -165,6 +167,7 @@
       <p class="mt-1 text-sm text-ink-soft">登记石种、钮式与尺寸；卡片回显已刻方数、谱录方数与闲置天数。</p>
     </div>
     <div class="flex flex-wrap gap-2">
+      <button class="gb-btn" onclick={() => void push('/loans')}>借展点交</button>
       <button class="gb-btn" onclick={() => void push('/carve')}>前往刻制看板</button>
       <button class="gb-btn" onclick={() => void loadStones()}>刷新</button>
       <button class="gb-btn-primary" onclick={openCreate}>新建印石</button>
@@ -176,7 +179,8 @@
     <StatBadge label="已刻方数" value={totals.carved} suffix="方" tone="jade" />
     <StatBadge label="印稿总数" value={totals.designs} suffix="稿" tone="amber" />
     <StatBadge label="闲置印石" value={totals.idle} suffix="方" />
-    <StatBadge label="钤印记录" value={totals.impressions} suffix="次" tone="ink" />
+    <StatBadge label="借展出库" value={totals.loaned} suffix="方" tone="ink" />
+    <StatBadge label="钤印记录" value={totals.impressions} suffix="次" />
   </div>
 
   <FilterBar
@@ -211,17 +215,26 @@
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {#each $filteredStones as stone (stone.id)}
         {@const stat = statMap[stone.id]}
+        {@const activeLoan = activeBatchOfStone(stone.id)}
+        {@const isLoaned = $lockedStoneIds.has(stone.id)}
         <article
-          class="gb-panel transition hover:shadow-lg {$currentStoneId === stone.id ? 'ring-2 ring-seal/40' : ''}"
+          class="gb-panel transition hover:shadow-lg {$currentStoneId === stone.id ? 'ring-2 ring-seal/40' : ''} {isLoaned
+            ? 'ring-1 ring-seal/30'
+            : ''}"
         >
           <header class="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div class="flex flex-wrap items-center gap-2">
               <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">{STONE_TYPE_LABEL[stone.stoneType]}</span>
               <span class="font-semibold text-ink">{stone.name}</span>
             </div>
-            <span class="gb-tag" style="color:{STONE_STATE_COLOR[stone.state]};border-color:{STONE_STATE_COLOR[stone.state]}66">
-              {STONE_STATE_LABEL[stone.state]}
-            </span>
+            <div class="flex items-center gap-1">
+              {#if isLoaned}
+                <span class="gb-tag" style="color:#9c2b1f;border-color:#9c2b1f66">借出中</span>
+              {/if}
+              <span class="gb-tag" style="color:{STONE_STATE_COLOR[stone.state]};border-color:{STONE_STATE_COLOR[stone.state]}66">
+                {STONE_STATE_LABEL[stone.state]}
+              </span>
+            </div>
           </header>
 
           <dl class="space-y-1 text-sm text-ink-soft">
@@ -232,11 +245,19 @@
               {stat?.catalogIncluded ?? 0} 方
             </div>
             <div>闲置 {stat?.idleDays ?? 0} 天 · 最近钤印 {stat?.lastStampedAt || '暂无'}</div>
+            {#if activeLoan}
+              <div class="text-seal">
+                借展：{activeLoan.borrower} · 归还日 {activeLoan.dueDate}
+              </div>
+            {/if}
           </dl>
 
           <div class="mt-3 flex flex-wrap items-center gap-2">
             {#if bestGradeOf(stone.id)}
               <GradeTag grade={bestGradeOf(stone.id) as Grade} size="small" note={`最佳评级 ${GRADE_LABEL[bestGradeOf(stone.id) as Grade]}`} />
+            {/if}
+            {#if isLoaned}
+              <span class="text-xs text-seal">印稿 · 工序 · 钤印已锁定，归还前只读</span>
             {/if}
           </div>
 
@@ -244,10 +265,14 @@
             {#if $currentStoneId !== stone.id}
               <button class="gb-btn" onclick={() => setCurrentStone(stone.id)}>设为当前</button>
             {/if}
-            <button class="gb-btn" onclick={() => advance(stone)}>推进状态</button>
-            <button class="gb-btn" onclick={() => openDesigns(stone)}>印稿设计</button>
-            <button class="gb-btn" onclick={() => openEdit(stone)}>编辑</button>
-            <button class="gb-btn-danger" onclick={() => (pendingDelete = stone)}>删除</button>
+            {#if isLoaned}
+              <button class="gb-btn" onclick={() => void push('/loans')}>查看借展批次</button>
+            {:else}
+              <button class="gb-btn" onclick={() => advance(stone)}>推进状态</button>
+              <button class="gb-btn" onclick={() => openDesigns(stone)}>印稿设计</button>
+            {/if}
+            <button class="gb-btn" disabled={isLoaned} title={isLoaned ? '借出中不可编辑' : ''} onclick={() => openEdit(stone)}>编辑</button>
+            <button class="gb-btn-danger" disabled={isLoaned} title={isLoaned ? '借出中不可删除' : ''} onclick={() => (pendingDelete = stone)}>删除</button>
           </div>
         </article>
       {/each}

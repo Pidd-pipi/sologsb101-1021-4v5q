@@ -13,6 +13,7 @@ import {
   type StoneType,
 } from '$lib/types/stone';
 import { sortByPurchaseDate } from '$lib/utils/stone';
+import { assertUnlocked } from '$lib/utils/lock';
 
 export interface StoneFilters {
   keyword: string;
@@ -104,6 +105,7 @@ export async function createStone(draft: StoneDraft): Promise<Stone> {
 }
 
 export async function updateStone(id: string, patch: Partial<Stone>): Promise<void> {
+  assertUnlocked(stoneById(id), '该印石');
   await db.stones.update(id, { ...patch, updatedAt: Date.now() } as never);
   await loadStones();
 }

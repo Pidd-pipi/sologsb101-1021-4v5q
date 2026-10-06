@@ -18,6 +18,8 @@ export interface Catalog {
   included: IncludedStatus;
   /** 备注 */
   note: string;
+  /** 借展点交锁定：所属印石借出期间，收录状态与排序只读 */
+  loanLocked?: boolean;
   createdAt: number;
   updatedAt: number;
 }

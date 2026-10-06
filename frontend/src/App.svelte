@@ -11,6 +11,7 @@
   import { designs, loadDesigns } from '$lib/stores/designStore';
   import { carves, loadCarves } from '$lib/stores/carveStore';
   import { impressions, loadImpressions } from '$lib/stores/impressionStore';
+  import { loadLoanBatches, loanBatches } from '$lib/stores/loanStore';
   import { useIdbTable } from '$lib/hooks/useIdbTable';
   import type { Catalog } from '$lib/types/catalog';
 
@@ -23,10 +24,27 @@
 
   const current = $derived(activeNav(router.location));
 
+  let reloading = false;
+  async function reloadAll(): Promise<void> {
+    if (reloading) return;
+    reloading = true;
+    try {
+      await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), loadLoanBatches(), catalogTable.refresh()]);
+    } finally {
+      reloading = false;
+    }
+  }
+
   onMount(async () => {
     try {
       await initDatabase();
-      await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions()]);
+      await Promise.all([loadStones(), loadDesigns(), loadCarves(), loadImpressions(), loadLoanBatches()]);
+      // 多标签同时点交：标签重新可见，或其它标签写入 Dexie（触发 storage 信号）时刷新，
+      // 避免用旧清单覆盖先完成的借出
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') void reloadAll();
+      });
+      window.addEventListener('storage', () => void reloadAll());
     } catch (error) {
       errorText = error instanceof Error ? error.message : '本地数据库初始化失败';
     } finally {
@@ -82,7 +100,7 @@
     <span>数据仅保存在本机浏览器（IndexedDB / localStorage），不上传任何服务器。</span>
     <span>
       印石 {$stones.length} 方 · 印稿 {$designs.length} 稿 · 工序 {$carves.length} 道 · 钤印
-      {$impressions.length} 次 · 谱录 {$catalogRows.length} 条
+      {$impressions.length} 次 · 谱录 {$catalogRows.length} 条 · 借展批次 {$loanBatches.length} 批
     </span>
   </footer>
 </div>

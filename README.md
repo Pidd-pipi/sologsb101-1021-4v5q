@@ -44,7 +44,7 @@ docker compose up -d --build      # 代码改动后重新构建
 | 构建工具 | Vite 6 + `@sveltejs/vite-plugin-svelte` | 开发服务器端口 22821 |
 | 状态管理 | Svelte store（`writable` / `derived`） | `stoneStore` / `designStore` / `carveStore` / `impressionStore` |
 | 路由 | Svelte SPA Router（hash 模式，`svelte-spa-router`） | 地址形如 `/#/stones`；`index.html` 内置脚本把 `/stones` 路径式深链重写为 hash 形式 |
-| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2 升级迁移 |
+| 本地存储 | Dexie 4（IndexedDB 封装）+ localStorage | 含数据结构版本号与 v1→v2→v3 升级迁移（v3 增加借展批次表） |
 | 容器化 | Docker 多阶段构建：`node:20-alpine` → `nginx:alpine` | 构建阶段类型检查 + 打包，运行阶段仅托管静态产物 |
 
 ---
@@ -67,11 +67,12 @@ npm run preview    # 本地预览构建产物（http://localhost:22821）
 
 | 路由（hash 形式） | 页面 | 主要职责 | 消费模型 |
 | --- | --- | --- | --- |
-| `/#/stones` | 印石台账 | 新建印石、按石种与钮式筛选（同步 URL query），显示已刻方数、谱录方数与闲置天数 | Stone、Design |
-| `/#/designs` | 印稿设计与释文 | 朱文白文、边框式样与章法备注录入，标记采用稿（同石采用稿唯一） | Design、Stone |
-| `/#/carve` | 刻制工序看板 | 按印稿列出刀法步骤、拖拽或上下移排序、批量完成；全部完成回写印石为「已刻」 | Carve、Design |
-| `/#/impressions` | 钤印登记与效果比对 | 同稿多枚并列展示印泥、纸张、压力与评级，按评级择优并一键回填采用稿效果 | Impression、Design |
-| `/#/catalog` | 印谱汇总与导出 | 排序重编号、收录状态切换、印谱清单生成、JSON 导入导出与清空重播种 | Catalog 及全部模型 |
+| `/#/stones` | 印石台账 | 新建印石、按石种与钮式筛选（同步 URL query），显示已刻方数、谱录方数、闲置天数与借展状态 | Stone、Design、LoanBatch |
+| `/#/designs` | 印稿设计与释文 | 朱文白文、边框式样与章法备注录入，标记采用稿（同石采用稿唯一）；借出中印稿只读 | Design、Stone |
+| `/#/carve` | 刻制工序看板 | 按印稿列出刀法步骤、拖拽或上下移排序、批量完成；全部完成回写印石为「已刻」；借出中锁定 | Carve、Design |
+| `/#/impressions` | 钤印登记与效果比对 | 同稿多枚并列展示印泥、纸张、压力与评级，按评级择优并一键回填采用稿效果；借出中锁定 | Impression、Design |
+| `/#/catalog` | 印谱汇总与导出 | 排序重编号、收录状态切换、印谱清单生成、JSON 导入导出与清空重播种；借出条目只读 | Catalog 及全部模型 |
+| `/#/loans` | 借展点交与归还核还 | 从已收录未借出印章选批出库，登记借展方 / 归还日 / 印谱快照；整批事务点交与归还，并发拒绝、失败回滚重试 | LoanBatch 及全部模型 |
 
 未知路径由 `routes/NotFound.svelte` 给出友好空态（不白屏）。筛选条件写入 hash query（`?kw=&stoneType=&knobStyle=` 等），刷新后可完整还原。
 
@@ -85,9 +86,19 @@ npm run preview    # 本地预览构建产物（http://localhost:22821）
 | Design 印稿 | `src/lib/types/design.ts` | `id` `stoneId` `sealText` `annotation` `style`（朱文/白文） `borderStyle`（无框/双边/借边/瓦当） `layoutNote` `adopted` | 同石多稿，采用稿唯一，采用后带出到刻制与钤印 |
 | Carve 刻制工序 | `src/lib/types/carve.ts` | `id` `designId` `seq` `knifeMethod`（冲刀/切刀/双刀/修整） `minutes` `operator` `state`（未开始/进行中/已完成） | 拖拽调序，全部完成即回写印石为已刻 |
 | Impression 钤印记录 | `src/lib/types/impression.ts` | `id` `designId` `inkBrand` `paperType`（连史纸/宣纸/罗纹纸） `pressure`（轻/中/重） `grade`（优/良/一般/废） `stampedAt` | 同稿多次钤印按评级排序择优，可一键回填采用稿效果 |
-| Catalog 印谱条目 | `src/lib/types/catalog.ts` | `id` `stoneId` `designId` `orderNo` `included`（待收录/已收录/不收录） `note` | 调整排序后自动重编号并汇总已收录方数 |
+| Catalog 印谱条目 | `src/lib/types/catalog.ts` | `id` `stoneId` `designId` `orderNo` `included`（待收录/已收录/不收录） `note` `loanLocked` | 调整排序后自动重编号并汇总已收录方数；印石借出期间只读 |
+| LoanBatch 借展批次 | `src/lib/types/loan.ts` | `id` `batchNo` `borrower` `dueDate` `loanedAt` `handler` `status`（待点交/借出中/部分归还/已归还） `items[]` `snapshot` `lastError` | 整批点交 / 归还核还；明细含状态（待点交/借出中/已核还/缺损待处理/灭失）、缺损与养护结论、核对人；`snapshot` 为点交时五表全量印谱快照 |
 
-数据结构版本号 `DB_VERSION` 定义在 `src/lib/utils/db.ts`，当前为 `v2`：`v1` 为初版五表结构；`v2` 补充 `stones.purchaseDate`、`designs.borderStyle`、`carves.operator`、`impressions.paperType`、`catalogs.included` 等索引，并在 Dexie `.upgrade()` 中回填历史记录缺失字段（`grade`、`adopted`、`borderStyle`、`orderNo`、`included`、`note`）。
+数据结构版本号 `DB_VERSION` 定义在 `src/lib/utils/db.ts`，当前为 `v3`：`v1` 为初版五表结构；`v2` 补充 `stones.purchaseDate`、`designs.borderStyle`、`carves.operator`、`impressions.paperType`、`catalogs.included` 等索引，并在 Dexie `.upgrade()` 中回填历史记录缺失字段；`v3` 新增 `loans` 借展批次表，并为五张业务表补充 `loanLocked` 锁定字段与索引。旧档案缺借展字段时一律按「未借出」兼容（`loanLocked` 缺省即未锁定），旧版备份（无 `loans` 集合）可正常导入。
+
+### 借展点交事务约定
+
+- **出库范围**：只能选择印谱中 `included='included'`（已收录）且未被在借批次占用的印石。
+- **整批原子提交**：点交在单个 Dexie 事务内完成「冲突复检 → 印谱快照 → 明细置借出 → 印石 / 印稿 / 工序 / 钤印 / 印谱条目整批加锁 → 批次落库」；任一写入失败整批回滚，不留半成品。
+- **并发拒绝**：多标签或多批次同时点交时，事务内复检印石占用；先完成的借出生效，后提交批次抛冲突错误被拒绝，原清单以「待点交」草稿留档，冲突解除后可一键「原清单重试点交」。
+- **锁定只读**：借出期间印稿、刻制工序、钤印记录与印谱收录 / 排序均只读（store 写入口有守卫，页面按钮禁用）。
+- **归还核还**：逐方选择「完好 / 缺损 / 灭失」并填写缺损描述与养护结论；完好方立即解锁归位，缺损 / 灭失列入待处理并保持锁定，落实养护后在批次内「养护处理核销」才解锁。归还同样整批事务提交。
+- **同步显示**：台账、印谱与借展批次订阅同一份 IndexedDB；标签重新可见时自动刷新，避免用旧清单覆盖先完成的借出。
 
 ---
 
@@ -98,14 +109,14 @@ sologsb101-1021/
 ├── frontend/                     # 前端源码
 │   ├── src/
 │   │   ├── lib/
-│   │   │   ├── types/            # stone.ts design.ts carve.ts impression.ts catalog.ts
-│   │   │   ├── stores/           # stoneStore.ts designStore.ts carveStore.ts impressionStore.ts
+│   │   │   ├── types/            # stone.ts design.ts carve.ts impression.ts catalog.ts loan.ts
+│   │   │   ├── stores/           # stoneStore.ts designStore.ts carveStore.ts impressionStore.ts loanStore.ts
 │   │   │   ├── components/common/# GradeTag.svelte FilterBar.svelte StatBadge.svelte EmptyPanel.svelte
 │   │   │   ├── hooks/            # useCarveProgress.ts useIdbTable.ts
-│   │   │   ├── utils/            # stone.ts db.ts export.ts
+│   │   │   ├── utils/            # stone.ts db.ts export.ts loan.ts lock.ts
 │   │   │   └── router/           # index.ts（路由表 + 导航项）
 │   │   ├── routes/               # stones/+page.svelte designs/+page.svelte carve/+page.svelte
-│   │   │                         # impressions/+page.svelte catalog/+page.svelte NotFound.svelte
+│   │   │                         # impressions/+page.svelte catalog/+page.svelte loans/+page.svelte NotFound.svelte
 │   │   ├── App.svelte            # 应用外壳（导航 + 首屏初始化）
 │   │   ├── main.js main.ts       # 入口：main.js 引用 main.ts 的 bootstrap()
 │   │   └── app.css               # Tailwind 入口 + 基础层 / 组件层
@@ -127,9 +138,9 @@ sologsb101-1021/
 
 ## 七、数据存储说明
 
-- **IndexedDB（Dexie，数据库名 `gbsealcarve`）**：5 张业务表 `stones` / `designs` / `carves` / `impressions` / `catalogs`，由 `src/lib/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**三层互相引用**的演示数据（Stone → Design → Carve / Impression，另有 Stone → Catalog，固定 id 如 `stone_01`、`design_0101`、`carve_010101`），播种幂等，保证每个页面打开都有内容。
+- **IndexedDB（Dexie，数据库名 `gbsealcarve`）**：6 张业务表 `stones` / `designs` / `carves` / `impressions` / `catalogs` / `loans`，由 `src/lib/utils/db.ts` 统一定义 schema、版本号与升级迁移；`initDatabase()` 首次打开时自动播种**三层互相引用**的演示数据（Stone → Design → Carve / Impression，另有 Stone → Catalog，固定 id 如 `stone_01`、`design_0101`、`carve_010101`），播种幂等，保证每个页面打开都有内容。
 - **localStorage**：仅存元数据 —— `gbsealcarve:db-version`（本地结构版本）、`gbsealcarve:last-backup-at`（最近导出时间）、`gbsealcarve:ui-prefs`（当前印石 / 印稿）。
-- **备份**：`/catalog` 页可导出 JSON（5 张表全量数据 + 结构版本号），导入时校验 `app` 字段与各集合数组完整性，覆盖导入前二次确认；另有印谱清单 TXT 与钤印台账 CSV。
+- **备份**：`/catalog` 页可导出 JSON（6 张表全量数据 + 结构版本号；旧版备份缺 `loans` 集合时按空兼容），导入时校验 `app` 字段与各集合数组完整性，覆盖导入前二次确认；另有印谱清单 TXT 与钤印台账 CSV。
 - **隐私与无状态**：数据不上传任何服务器，容器不挂载命名卷；清理浏览器站点数据或更换浏览器会丢失档案，请定期导出备份。
 
 ---
